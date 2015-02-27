@@ -1,17 +1,14 @@
 package com.typesafe.plugin
 
 import play.api._
-import org.sedis._
 import redis.clients.jedis._
 import play.api.cache._
-import java.util._
 import java.io._
 import java.net.URI
 import biz.source_code.base64Coder._
 import org.apache.commons.lang3.builder._
 import play.api.mvc.Result
 import scala.concurrent.ExecutionContext.Implicits.global
-import org.apache.commons.pool2.impl.GenericObjectPool
 
 /**
  * provides a redis client and a CachePlugin implementation
@@ -52,11 +49,6 @@ class RedisPlugin(app: Application) extends CachePlugin {
    new JedisPool(poolConfig, host, port, timeout, password, database)
  }
 
-  /**
-  * provides access to the sedis Pool
-  */
- lazy val sedisPool = new Pool(jedisPool)
-
  private def createPoolConfig(app: Application) : JedisPoolConfig = {
    val poolConfig : JedisPoolConfig = new JedisPoolConfig()
    app.configuration.getInt("redis.pool.maxIdle").map { poolConfig.setMaxIdle(_) }
@@ -76,7 +68,7 @@ class RedisPlugin(app: Application) extends CachePlugin {
  }
 
  override def onStart() {
-    sedisPool
+    jedisPool
  }
 
  override def onStop() {
@@ -85,6 +77,15 @@ class RedisPlugin(app: Application) extends CachePlugin {
 
  override lazy val enabled = {
     !app.configuration.getString("redisplugin").filter(_ == "disabled").isDefined
+  }
+
+  private def withJedisClient[T](body: Jedis => T): T = {
+    val jedis = jedisPool.getResource
+    try {
+      body(jedis)
+    } finally {
+      jedisPool.returnResourceObject(jedis)
+    }
   }
 
  /**
@@ -141,7 +142,7 @@ class RedisPlugin(app: Application) extends CachePlugin {
        val redisV = prefix + "-" + new String( Base64Coder.encode( baos.toByteArray() ) )
        Logger.trace(s"Setting key ${key} to ${redisV}")
        
-       sedisPool.withJedisClient { client =>
+       withJedisClient { client =>
           client.set(key,redisV)
           if (expiration != 0) client.expire(key,expiration)
        }
@@ -153,7 +154,7 @@ class RedisPlugin(app: Application) extends CachePlugin {
      }
 
     }
-    def remove(key: String): Unit =  sedisPool.withJedisClient { client => client.del(key) }
+    def remove(key: String): Unit = withJedisClient { client => client.del(key) }
 
     class ClassLoaderObjectInputStream(stream:InputStream) extends ObjectInputStream(stream) {
       override protected def resolveClass(desc: ObjectStreamClass) = {
@@ -175,7 +176,7 @@ class RedisPlugin(app: Application) extends CachePlugin {
       Logger.trace(s"Reading key ${key}")
       
       try {
-        val rawData = sedisPool.withJedisClient { client => client.get(key) }
+        val rawData = withJedisClient { client => client.get(key) }
         rawData match {
           case null =>
             None
