@@ -9,6 +9,7 @@ import biz.source_code.base64Coder._
 import org.apache.commons.lang3.builder._
 import play.api.mvc.Result
 import scala.concurrent.ExecutionContext.Implicits.global
+import redis.clients.util.JedisURIHelper
 
 /**
  * provides a redis client and a CachePlugin implementation
@@ -35,9 +36,14 @@ class RedisPlugin(app: Application) extends CachePlugin {
  private lazy val timeout = app.configuration.getInt("redis.timeout")
                             .getOrElse(2000)
 
- private lazy val database = app.configuration.getInt("redis.database")
-                          	.getOrElse(0)
+ private def getDatabaseFromUri: Option[Int] = redisUri.map(uri => JedisURIHelper.getDBIndex(uri))
 
+ private lazy val database = app.configuration.getInt("redis.database")
+                          	.orElse(getDatabaseFromUri)
+                            .getOrElse(0)
+
+
+ private lazy val namespace = app.configuration.getString("redis.namespace")
 
  /**
   * provides access to the underlying jedis Pool
@@ -86,6 +92,12 @@ class RedisPlugin(app: Application) extends CachePlugin {
     } finally {
       jedisPool.returnResourceObject(jedis)
     }
+  }
+
+  private def createKey(key: String): String = {
+    namespace map { ns => 
+      s"${ns}:${key}"
+    } getOrElse key
   }
 
  /**
@@ -143,7 +155,7 @@ class RedisPlugin(app: Application) extends CachePlugin {
        Logger.trace(s"Setting key ${key} to ${redisV}")
        
        withJedisClient { client =>
-          client.set(key,redisV)
+          client.set(createKey(key),redisV)
           if (expiration != 0) client.expire(key,expiration)
        }
      } catch {case ex: IOException =>
@@ -154,7 +166,7 @@ class RedisPlugin(app: Application) extends CachePlugin {
      }
 
     }
-    def remove(key: String): Unit = withJedisClient { client => client.del(key) }
+    def remove(key: String): Unit = withJedisClient { client => client.del(createKey(key)) }
 
     class ClassLoaderObjectInputStream(stream:InputStream) extends ObjectInputStream(stream) {
       override protected def resolveClass(desc: ObjectStreamClass) = {
@@ -176,7 +188,7 @@ class RedisPlugin(app: Application) extends CachePlugin {
       Logger.trace(s"Reading key ${key}")
       
       try {
-        val rawData = withJedisClient { client => client.get(key) }
+        val rawData = withJedisClient { client => client.get(createKey(key)) }
         rawData match {
           case null =>
             None
