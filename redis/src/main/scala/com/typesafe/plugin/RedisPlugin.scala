@@ -9,6 +9,7 @@ import biz.source_code.base64Coder._
 import org.apache.commons.lang3.builder._
 import play.api.mvc.Result
 import scala.concurrent.ExecutionContext.Implicits.global
+import redis.clients.util.JedisURIHelper
 
 /**
  * provides a redis client and a CachePlugin implementation
@@ -35,8 +36,11 @@ class RedisPlugin(app: Application) extends CachePlugin {
  private lazy val timeout = app.configuration.getInt("redis.timeout")
                             .getOrElse(2000)
 
+ private def getDatabaseFromUri: Option[Int] = redisUri.map(uri => JedisURIHelper.getDBIndex(uri))
+
  private lazy val database = app.configuration.getInt("redis.database")
-                          	.getOrElse(0)
+                          	.orElse(getDatabaseFromUri)
+                            .getOrElse(0)
 
 
  /**
